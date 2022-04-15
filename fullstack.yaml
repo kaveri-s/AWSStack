@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: Stack built for Fovus Internship
+
+Parameters:
+  Region: 'us-west-1'
+
+Resources:
+  MyApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowMethods:
+          - POST
+        AllowHeaders:
+          - "*"
+        AllowOrigins:
+          - "*"
+
+  S3UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - HEAD
+            AllowedOrigins:
+              - "*"
+
+  DDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: N
+        - AttributeName: input_text
+          AttributeType: S
+        - AttributeName: input_file_path
+          AttributeType: S
+        - AttributeName: output_file_path
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: RANGE
+
+  UploadRequestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Upload file from html to S3 and DynamoDB
+      CodeUri: upload/
+      Handler: upload.lambda_handler
+      Runtime: python3.9
+      Timeout: 3
+      MemorySize: 128
+      Environment:
+        REGION: !Ref Region
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref S3UploadBucket
+        - Statement:
+          - Effect: Allow
+            Resource: !Sub 'arn:aws:s3:::${S3UploadBucket}/'
+            Action:
+              - s3:putObjectAcl
+        - DynamoDBWritePolicy:
+            TableName: !Ref DDBTable
+        - Statement:
+          - Effect: Allow
+            Resource: !Sub 'arn:aws:dynamodb:::${DDBTable}/'
+            Action:
+              - dynamodb:putItemAcl
+      Events:
+        UploadAssetAPI:
+          Type: HttpApi
+          Properties:
+            Path: /upload
+            Method: post
+            ApiId: !Ref MyApi
+
+  S3BucketOutInvocation:
+    Type: Custom::S3BucketOut
+    Properties:
+      ServiceToken: !GetAtt UploadRequestFunction.Arn
+      Region: !Ref Region
+
+  Outputs:
+    LambdaFunctionOutput:
+      Value: !GetAtt S3BucketOutInvocation.S3BucketOut
+      Description: Return Value of Lambda Function
+
+  SshKeyParameter:
+    Description: SSH Keypair to login to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+
+  MergeFiles:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      CodeUri: .
+      Handler: launch.lambda_handler
+      Runtime: python3.9
+      Description: Launch VM and Merge files. Repeat Upload
+      MemorySize: 128
+      Timeout: 3
+      Environment:
+        ID: !Ref LambdaFunctionOutput
+        AMI:
+        INSTANCE_TYPE: 't2.micro'
+        KEY_NAME: !Ref SshKeyParameter
+        SUBNET_ID: 'subnet-06c0439c683654068'
+        REGION: !Ref Region
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref S3UploadBucket
+        - Statement:
+            - Effect: Allow
+              Resource: !Sub 'arn:aws:dynamodb:::${DDBTable}/'
+              Action:
+                - s3:*ObjectAcl
+        - DynamoDBReadPolicy:
+            TableName: !Ref DDBTable
+        - Statement:
+            - Effect: Allow
+              Resource: !Sub 'arn:aws:dynamodb:::${DDBTable}/'
+              Action:
+                - dynamodb:getItemAcl
+      Events:
+        BucketEvent:
+          Type: S3
+          Properties:
+            Bucket: !Ref S3UploadBucket
+            Events:
+              - 's3:ObjectCreated:Put'
