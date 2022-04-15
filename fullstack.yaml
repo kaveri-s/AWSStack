@@ -6,21 +6,6 @@ Parameters:
     Type: String
     Description: Region of resources
     Default: us-west-1
-  InstanceType:
-    Type: String
-    Default: t2.micro
-  SshKeyParameter:
-    Description: SSH Keypair to login to the instance
-    Type: AWS::EC2::KeyPair::KeyName
-    Default: fovustest
-  SubnetId:
-    Description: SSH Keypair to login to the instance
-    Type: AWS::EC2::Subnet::Id
-    Default: subnet-06c0439c683654068
-  Ami:
-    Description: AMI to use
-    Type: String
-    Default: ami-03ededff12e34e59e
 
 Resources:
 
@@ -124,15 +109,10 @@ Resources:
       AttributeDefinitions:
         - AttributeName: id
           AttributeType: N
-        - AttributeName: input_text
-          AttributeType: S
-        - AttributeName: input_file_path
-          AttributeType: S
-        - AttributeName: output_file_path
-          AttributeType: S
       KeySchema:
         - AttributeName: id
-          KeyType: RANGE
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
 
   LambdaIamRole:
     Type: AWS::IAM::Role
@@ -193,125 +173,13 @@ Resources:
       Environment:
         Variables:
           REGION: !Ref Region
-      Policies:
-        - S3WritePolicy:
-            BucketName: !Ref S3UploadBucket
-        - Statement:
-          - Effect: Allow
-            Resource: !Sub 'arn:aws:s3:::${S3UploadBucket}/'
-            Action:
-              - s3:putObjectAcl
-        - DynamoDBWritePolicy:
-            TableName: !Ref DDBTable
-        - Statement:
-          - Effect: Allow
-            Resource: !Sub 'arn:aws:dynamodb:::${DDBTable}/'
-            Action:
-              - dynamodb:putItemAcl
-#      Events:
-#        UploadAssetAPI:
-#          Type: HttpApi
-#          Properties:
-#            Path: /upload
-#            Method: post
-#            ApiId: !Ref MyApi
+      Role: !GetAtt LambdaIamRole.Arn
 
   S3BucketOutInvocation:
     Type: Custom::S3BucketOut
     Properties:
       ServiceToken: !GetAtt UploadRequestFunction.Arn
       Region: !Ref Region
-
-  MergeFiles:
-    Type: AWS::Lambda::Function
-    Properties:
-      Code:
-        ZipFile: |
-          import os
-          import boto3
-
-          AMI = os.environ['AMI']
-          INSTANCE_TYPE = os.environ['INSTANCE_TYPE']
-          KEY_NAME = os.environ['KEY_NAME']
-          SUBNET_ID = os.environ['SUBNET_ID']
-          REGION = os.environ['REGION']
-          BUCKET = os.environ['BUCKET']
-          TABLE = os.environ['TABLE']
-          ID = os.environ['ID']
-
-          ec2 = boto3.client('ec2', region_name=REGION)
-
-          def handler(event, context):
-              init_script = f"""#!/bin/bash
-                          yum update -y
-                          yum install -y jq
-
-                          aws s3 cp s3://{BUCKET}/InputFile.txt filedata
-                          aws dynamodb get-item --table-name {TABLE} \
-                          --key '{{"Id":{{"N":"{ID}"}}}}' \
-                          --consistent-read \
-                          --projection-expression "input_text" \
-                          --return-consumed-capacity TOTAL > input.json \
-
-                          jq '.input_text' input.json > input_text
-                          (cat filedata; echo ':'; cat input_text) > outputdata
-                          (echo '{{ "input_text":'; cat input_txt; echo ', "output_file_path": "{BUCKET}/OutputFile.txt"}}') > output.json
-
-                          aws s3 cp data s3://{BUCKET}/OutputFile.txt
-                          aws dynamodb put-item \
-                          --table-name Thread \
-                          --item file://output.json \
-
-                          shutdown -h +5"""
-
-              instance = ec2.run_instances(
-                  ImageId=AMI,
-                  InstanceType=INSTANCE_TYPE,
-                  KeyName=KEY_NAME,
-                  SubnetId=SUBNET_ID,
-                  MaxCount=1,
-                  MinCount=1,
-                  InstanceInitiatedShutdownBehavior='terminate',
-                  UserData=init_script
-              )
-
-              instance_id = instance['Instances'][0]['InstanceId']
-              return instance_id
-      Handler: index.handler
-      Runtime: python3.9
-      Description: Launch VM and Merge files. Repeat Upload
-      MemorySize: 128
-      Timeout: 3
-      Environment:
-        Variables:
-          ID: !ImportValue LambdaFunctionOutput
-          AMI: !Ref Ami
-          INSTANCE_TYPE: !Ref InstanceType
-          KEY_NAME: !Ref SshKeyParameter
-          SUBNET_ID: !Ref SubnetId
-          REGION: !Ref Region
-      Policies:
-        - S3CrudPolicy:
-            BucketName: !Ref S3UploadBucket
-        - Statement:
-            - Effect: Allow
-              Resource: !Sub 'arn:aws:dynamodb:::${DDBTable}/'
-              Action:
-                - s3:*ObjectAcl
-        - DynamoDBReadPolicy:
-            TableName: !Ref DDBTable
-        - Statement:
-            - Effect: Allow
-              Resource: !Sub 'arn:aws:dynamodb:::${DDBTable}/'
-              Action:
-                - dynamodb:getItemAcl
-      Events:
-        BucketEvent:
-          Type: S3
-          Properties:
-            Bucket: !Ref S3UploadBucket
-            Events:
-              - 's3:ObjectCreated:Put'
 
 Outputs:
   LambdaFunctionOutput:
