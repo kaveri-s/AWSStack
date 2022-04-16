@@ -6,6 +6,21 @@ Parameters:
     Type: String
     Description: Region of resources
     Default: us-west-1
+  InstanceType:
+    Type: String
+    Default: t2.micro
+  SshKeyParameter:
+    Description: SSH Keypair to login to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: fovustest
+  SubnetId:
+    Description: SSH Keypair to login to the instance
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-06c0439c683654068
+  Ami:
+    Description: AMI to use
+    Type: String
+    Default: ami-03ededff12e34e59e
 
 Resources:
 
